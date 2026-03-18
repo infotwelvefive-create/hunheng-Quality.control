@@ -349,7 +349,7 @@ body{background:var(--bg);font-family:var(--fn);color:var(--txt);min-height:100v
         <button class="period-btn" id="rb-week" onclick="setRPeriod('week')">สัปดาห์</button>
         <button class="period-btn" id="rb-month" onclick="setRPeriod('month')">เดือน</button>
       </div>
-      <div class="card"><div class="card-title">รายงานส่ง Honey</div><div class="exp-box" id="exp-box"></div><button class="copy-btn" onclick="copyExp()">คัดลอกรายงาน</button></div>
+      <div class="card"><div class="card-title">รายงานส่งผู้บริหาร</div><div class="exp-box" id="exp-box"></div><button class="copy-btn" onclick="copyExp()">คัดลอกรายงาน</button></div>
       <div class="card" style="margin-top:4px"><div class="card-title" style="margin-bottom:8px">ช่างเกรด C สูงสุด</div><div id="c-rank"></div></div>
       <div class="card" style="margin-top:4px"><div class="card-title" style="margin-bottom:8px">จุดบกพร่องที่พบบ่อย</div><div id="defect-rank-qc"></div></div>
     </div>
@@ -409,8 +409,8 @@ body{background:var(--bg);font-family:var(--fn);color:var(--txt);min-height:100v
 
 <script>
 // ══ CONFIG ══
-const PINS = { qc: '1234', mgr: '5678' }; // ← เปลี่ยน PIN ได้ที่นี่
-const TAILOR_NAMES = ['เนตร','ออฟ','ฟ้า','ตาล','ดีซ่า']; // ← เพิ่มชื่อช่างที่นี่
+const PINS = { qc: '0123', mgr: '0125' }; // ← เปลี่ยน PIN ได้ที่นี่
+const TAILOR_NAMES = ['รส','วิกกี้','พลอย','ริน','วรรณ','แอนนา']; // ← เพิ่มชื่อช่างที่นี่
 
 const DEFECT_CATS=[
   {id:'stitch',label:'การตัดเย็บ',ico:'🧵',items:[
@@ -435,12 +435,75 @@ const DEFECT_CATS=[
 const DW={s1:2,s2:2,s6:2,f2:2,z1:2,z2:2,s3:1,s4:1,s5:1,f1:1,f3:1,f4:1,f5:1,f6:1,z3:1,z4:1,l1:1,l2:1,l3:1,l4:1};
 const MG=['A','B','C'];
 
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxIb2a8UzgJw5bm5QRHAL4fjPYGdp17gzljrUvC0lNcdAe6mlYlx65Y5AuObIuSEDNsew/exec';
+
 let records=[];
 try{records=JSON.parse(localStorage.getItem('hunheng_qc3')||'[]');}catch(e){}
 let curRole='',curTailor='',pinStr='',qcPeriod='today',rPeriod='today',mgrPeriod='today',mgrRPeriod='today',tailorPeriod='today';
 let grade='',qty=1,photos=[],checkedDefects={},quickMode='';
+let isSyncing=false;
 
-function save(){try{localStorage.setItem('hunheng_qc3',JSON.stringify(records));}catch(e){}}
+function save(){
+  try{localStorage.setItem('hunheng_qc3',JSON.stringify(records));}catch(e){}
+}
+
+async function loadFromSheet(){
+  try{
+    showSyncStatus('กำลังโหลดข้อมูล...');
+    const res = await fetch(SHEET_URL+'?t='+Date.now());
+    const data = await res.json();
+    if(Array.isArray(data) && data.length > 0){
+      // รวม local + sheet โดย sheet เป็นหลัก
+      const sheetIds = new Set(data.map(r=>r.id||r.date+'_'+r.time+'_'+r.tailor));
+      // แปลง sheet data ให้มี id
+      const sheetRecs = data.map(r=>{
+        if(!r.id) r.id = r.date+'_'+r.time+'_'+r.tailor;
+        if(!r.defectLabels) r.defectLabels=[];
+        if(!r.photos) r.photos=[];
+        if(!r.defects) r.defects={};
+        if(!r.qty) r.qty=parseInt(r.qty)||1;
+        return r;
+      });
+      records = sheetRecs;
+      save();
+    }
+    hideSyncStatus();
+  }catch(e){
+    hideSyncStatus();
+    console.log('load error',e);
+  }
+}
+
+async function sendToSheet(rec){
+  try{
+    const payload = {
+      id: rec.id,
+      date: rec.date,
+      time: rec.time,
+      tailor: rec.tailor,
+      prod: rec.prod,
+      lot: rec.lot||'',
+      qty: rec.qty,
+      grade: rec.grade,
+      defectLabels: rec.defectLabels||[],
+      note: rec.note||''
+    };
+    await fetch(SHEET_URL, {
+      method:'POST',
+      body: JSON.stringify(payload)
+    });
+  }catch(e){console.log('send error',e);}
+}
+
+function showSyncStatus(msg){
+  let el=document.getElementById('sync-bar');
+  if(!el){el=document.createElement('div');el.id='sync-bar';el.style.cssText='position:fixed;top:0;left:0;right:0;background:#185FA5;color:#fff;text-align:center;font-size:12px;padding:6px;z-index:999;font-family:var(--fn)';document.body.appendChild(el);}
+  el.textContent=msg;el.style.display='block';
+}
+function hideSyncStatus(){
+  const el=document.getElementById('sync-bar');
+  if(el)el.style.display='none';
+}
 
 // ══ LOGIN ══
 function selectRole(r){
@@ -490,9 +553,17 @@ function enterApp(role){
   document.getElementById('bar-title').textContent=role==='tailor'?'งานของ '+curTailor:'QC ฮันเฮง';
   document.getElementById('bar-role').textContent=roleLabel;
   document.getElementById('bar-role').className='app-bar-role '+roleClass;
-  if(role==='qc'){document.getElementById('app-qc').style.display='block';buildDF();records.forEach(r=>updateSugg(r.tailor));}
-  else if(role==='mgr'){document.getElementById('app-mgr').style.display='block';renderMgrDash();}
-  else{document.getElementById('app-tailor').style.display='block';renderTailor('today');}
+  if(role==='qc'){
+    document.getElementById('app-qc').style.display='block';
+    buildDF();
+    loadFromSheet().then(()=>{records.forEach(r=>updateSugg(r.tailor));});
+  } else if(role==='mgr'){
+    document.getElementById('app-mgr').style.display='block';
+    loadFromSheet().then(()=>renderMgrDash());
+  } else {
+    document.getElementById('app-tailor').style.display='block';
+    loadFromSheet().then(()=>renderTailor('today'));
+  }
 }
 function logout(){
   ['app-qc','app-mgr','app-tailor'].forEach(id=>document.getElementById(id).style.display='none');
@@ -600,6 +671,7 @@ function submitQC(){
     prod:document.getElementById('f-prod').value.trim(),lot:document.getElementById('f-lot').value.trim(),
     grade,qty,defects:ds,defectLabels:dl,quickMode,note:document.getElementById('f-note').value.trim(),photos:[...photos]};
   records.push(rec);save();updateSugg(rec.tailor);
+  sendToSheet(rec).then(()=>showSyncStatus('บันทึกลง Google Sheet แล้ว ✓')).then(()=>setTimeout(hideSyncStatus,2000));
   ['f-prod','f-lot','f-note'].forEach(id=>document.getElementById(id).value='');
   photos=[];renderPG();qty=1;sync();quickMode='';grade='';showMG(true);MG.forEach(g=>document.getElementById('gb-'+g).className='gbtn');
   clearAll();chk();toast('บันทึกแล้ว ✓  เกรด '+rec.grade+' — '+rec.tailor+' ('+rec.qty+'ชิ้น)');buildDF();
